@@ -20,7 +20,7 @@ Reuse this setup on another Android TV. It includes seven wallpapers that shuffl
 
 | What you want | What you need |
 | --- | --- |
-| The seven wallpapers and six-hour shuffle | CleanYourTV already installed and set as Home |
+| The twelve wallpapers and six-hour shuffle | CleanYourTV already installed and set as Home |
 | The full custom layout | Android TV 8 or later, a clean CleanYourTV checkout, JDK 17, and Android SDK platform and build tools 34 |
 
 ## Install the theme in one command
