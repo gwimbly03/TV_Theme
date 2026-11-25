@@ -28,7 +28,7 @@ Reuse this setup on another Android TV. It includes seven wallpapers that shuffl
 You need CleanYourTV set as Home on the TV and Android Platform-Tools (`adb`) on your computer. Enable and authorize ADB on the TV. From the **TV_Theme** folder, run this command with your TV's address:
 
 ```bash
-bash install-theme.sh 192.168.1.50
+bash install-theme.sh "<TV_IP_ADDRESS>"
 ```
 
 For a TV already connected and authorized over ADB, run `bash install-theme.sh` with no address. The command works in Bash on Linux, macOS, and Windows with Git Bash. It backs up the current theme in a timestamped folder on the TV, copies the new theme, and opens CleanYourTV to load it. The theme installer needs no Python or separate CleanYourTV source checkout. Some firmware restricts ADB access to the launcher’s theme folder. If access is blocked, the command stops before replacing the theme.
