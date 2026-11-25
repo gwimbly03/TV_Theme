@@ -1,0 +1,2171 @@
+diff --git a/launcher/app/src/main/AndroidManifest.xml b/launcher/app/src/main/AndroidManifest.xml
+index ca18afa9..324b465f 100644
+--- a/launcher/app/src/main/AndroidManifest.xml
++++ b/launcher/app/src/main/AndroidManifest.xml
+@@ -9,6 +9,7 @@
+ 
+     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
++    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+     <!-- Needed since Android 10 to read the Wi-Fi network name for the network pill. Never requested at
+          runtime: build-and-install grants it with pm grant, so lint's Android 12 "ask for COARSE with
+          FINE" rule does not apply here. -->
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/AppAdapter.java b/launcher/app/src/main/java/com/gathin/tvhome/AppAdapter.java
+index 7ab30bfd..3db70139 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/AppAdapter.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/AppAdapter.java
+@@ -188,6 +188,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+     private final boolean singleRow;
+     /** config always_show_names: the alpha of an unfocused tile's name (0 hides it). */
+     private final float restNameAlpha;
++    private final boolean iconRail;
+     /** cinematic_home: only then does a launch record the last-opened app the shelf uses. */
+     private final boolean cinematic;
+     /** Dock order (config.xml dock_apps, or a theme's config.json). */
+@@ -241,6 +242,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+         this.dockRow = cfg.dockRow;
+         this.singleRow = cfg.singleRow;
+         this.restNameAlpha = cfg.alwaysShowNames ? 0.75f : 0f;
++        this.iconRail = cfg.appSidebar;
+         this.cinematic = cfg.cinematicHome;
+         this.launchActions = cfg.launchActions;
+         this.iconTiles = new HashSet<>(Arrays.asList(ctx.getResources().getStringArray(R.array.icon_tiles)));
+@@ -298,7 +300,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+             if (!seen.add(pkg + '\n' + label)) continue;
+             Drawable banner = null;
+             // uniform_tiles draws the icon, so an app's banner is never loaded. A module card keeps its banner.
+-            if (!(uniformTiles && card == null)) {
++            if (!iconRail && !(uniformTiles && card == null)) {
+                 banner = bundledBanner(appBanners.get(pkg));
+                 if (banner == null) banner = iconTiles.contains(pkg) ? iconBanner(ri.loadIcon(pm)) : loadBanner(pm, ri);
+             }
+@@ -417,6 +419,21 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+         int inner = width - parent.getPaddingLeft() - parent.getPaddingRight();
+         int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density), h = tileHeightPx(w);
+         View card = v.findViewById(R.id.card);
++        if (iconRail) {
++            ViewGroup.LayoutParams cardSize = card.getLayoutParams();
++            cardSize.width = cardSize.height = Math.round(48 * density);
++            card.setLayoutParams(cardSize);
++            View icon = v.findViewById(R.id.icon);
++            FrameLayout.LayoutParams iconSize = (FrameLayout.LayoutParams) icon.getLayoutParams();
++            iconSize.width = iconSize.height = Math.round(40 * density);
++            iconSize.bottomMargin = 0;
++            icon.setLayoutParams(iconSize);
++            v.findViewById(R.id.name).setVisibility(View.GONE);
++            int padding = Math.round(5 * density);
++            v.setPadding(0, padding, 0, padding);
++            return new Holder(v, listener, animations, advancedEffects, reducedMotion, restNameAlpha, focusOvershoot);
++        }
++
+         ViewGroup.LayoutParams cardLp = card.getLayoutParams();
+         cardLp.width = w;
+         cardLp.height = h;
+@@ -478,7 +495,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+         // The dock has no labels, unless always_show_names asks for them (DockDecoration then makes room in the band).
+         // In a single row every tile is the dock's kind: the big title above names it.
+         boolean dockKind = DockSlots.inDockRow(dockRow, singleRow, position, dockSize);
+-        h.name.setVisibility(dockKind && restNameAlpha == 0f ? View.INVISIBLE : View.VISIBLE);
++        h.name.setVisibility(iconRail ? View.GONE
++                : dockKind && restNameAlpha == 0f ? View.INVISIBLE : View.VISIBLE);
++        h.card.setContentDescription(iconRail ? e.label : null);
+         h.inDock = dockKind;
+         boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
+         h.name.setAlpha(focused ? 1f : restNameAlpha);
+@@ -491,10 +510,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+         // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
+         // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
+         h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
+-        if (uniformTiles && e.banner == null) {
++        if (!iconRail && uniformTiles && e.banner == null) {
+             if (e.backdrop == null) e.backdrop = backdrop(e.icon, ambientColorAt(position));
+             h.card.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, e.backdrop));
+         }
++        if (iconRail) h.card.setBackground(null);
+         if (e.banner != null) {
+             h.icon.setImageDrawable(null);
+             h.banner.setImageDrawable(e.banner);
+@@ -507,7 +527,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+             h.icon.setImageDrawable(e.icon);
+             h.icon.setVisibility(View.VISIBLE);
+             h.label.setText(e.label);
+-            h.label.setVisibility(uniformTiles ? View.GONE : View.VISIBLE);
++            h.label.setVisibility(iconRail || uniformTiles ? View.GONE : View.VISIBLE);
+         }
+         h.card.setOnClickListener(v -> launch(e));
+         h.card.setOnLongClickListener(v -> {
+@@ -956,6 +976,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+                 name.animate().cancel();
+                 float scale = !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
+                 float s = focused ? scale : 1f;
++                float nameAlpha = focused ? 1f : restNameAlpha;
+                 if (!animations) {
+                     view.setScaleX(1f);
+                     view.setScaleY(1f);
+@@ -963,7 +984,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+                     view.setTranslationZ(0f);
+                     banner.setScaleX(1f);
+                     banner.setScaleY(1f);
+-                    name.setAlpha(focused ? 1f : restNameAlpha);
++                    name.setAlpha(nameAlpha);
+                     name.setTranslationY(0f);
+                 } else if (reducedMotion) {
+                     // A short zoom with no hardware layer: building a layer for so short an animation costs more
+@@ -974,7 +995,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+                             .setDuration(focused ? Motion.REDUCED_MS : 60)
+                             .setInterpolator(new DecelerateInterpolator())
+                             .start();
+-                    name.setAlpha(focused ? 1f : restNameAlpha);
++                    name.setAlpha(nameAlpha);
+                     // Same place as the full motion's slide ends: the layout's -6dp is only its starting point, and
+                     // left there the name overlaps the zoomed tile.
+                     // Only on focus: snapping it back to -6dp while it fades out would jump it up over the tile.
+@@ -991,7 +1012,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+                         banner.animate().scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f)
+                                 .setDuration(280).start();
+                     }
+-                    name.animate().alpha(focused ? 1f : restNameAlpha)
++                    name.animate().alpha(nameAlpha)
+                             .translationY(focused ? density * 4f : -density * 6f)
+                             .setDuration(220).start();
+                 }
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/ClockDream.java b/launcher/app/src/main/java/com/gathin/tvhome/ClockDream.java
+index bbf8ab86..d11d2bb5 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/ClockDream.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/ClockDream.java
+@@ -4,7 +4,7 @@ import android.service.dreams.DreamService;
+ 
+ /**
+  * Screensaver: the launcher's thin clock and date on black, over a slow ambient glow (ClockScene).
+- * No network, no images: cheap enough for a 1 GB TV.
++ * Can also show the theme wallpaper through ClockScene.
+  */
+ public class ClockDream extends DreamService {
+ 
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/ClockScene.java b/launcher/app/src/main/java/com/gathin/tvhome/ClockScene.java
+index 116d443e..080be8c4 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/ClockScene.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/ClockScene.java
+@@ -13,8 +13,13 @@ import android.graphics.drawable.LayerDrawable;
+ import android.os.Handler;
+ import android.os.Looper;
+ import android.util.DisplayMetrics;
++import android.view.Gravity;
+ import android.view.View;
++import android.view.ViewGroup;
++import android.widget.FrameLayout;
+ import android.widget.ImageView;
++import android.widget.LinearLayout;
++import android.widget.TextClock;
+ 
+ import java.io.File;
+ import java.time.LocalDateTime;
+@@ -55,6 +60,9 @@ final class ClockScene {
+     /** clock_wallpaper: the picture start() decodes, its darkening, and the resources to draw it with. */
+     private File wallpaperFile;
+     private int wallpaperShade;
++    private boolean softenWallpaper;
++    private GradientDrawable vignette;
++    private DigitalRain digitalRain;
+     private Resources wallpaperRes;
+     /** One number per decode request: a result whose number is no longer the current one is dropped. Main thread only. */
+     private int wallpaperGeneration;
+@@ -84,8 +92,10 @@ final class ClockScene {
+         glow = new GradientDrawable();
+         glow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
+         ambient.setBackground(glow);
+-        ambient.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
+-                glow.setGradientRadius((r - l) * 0.55f));
++        ambient.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
++            glow.setGradientRadius((r - l) * 0.55f);
++            if (vignette != null) updateVignetteSize();
++        });
+         colorIndex = random.nextInt(PALETTE.length);
+         setGlow(PALETTE[colorIndex]);
+     }
+@@ -93,18 +103,20 @@ final class ClockScene {
+     void start() {
+         content.setAlpha(0f);
+         content.post(() -> {
+-            placeClock();
++            placeClock(softenWallpaper);
+             content.animate().alpha(1f).setDuration(1200).start();
+         });
+         handler.removeCallbacks(tick);
+         handler.postDelayed(tick, MOVE_MS);
+         clockRefresh.start();
++        if (digitalRain != null) digitalRain.setRunning(true);
+         if (wallpaperFile != null && !wallpaperShown) loadWallpaper();
+     }
+ 
+     void stop() {
+         handler.removeCallbacksAndMessages(null);   // the tick and any glow steps still queued
+         clockRefresh.stop();
++        if (digitalRain != null) digitalRain.setRunning(false);
+         content.animate().cancel();
+         wallpaperGeneration++;   // a decode still running must not attach its picture to a stopped scene
+     }
+@@ -148,6 +160,17 @@ final class ClockScene {
+             longitude = moods.isEmpty() ? "" : ctx.getString(R.string.longitude);
+         }
+         wallpaperShade = (cfg.clockWallpaperDim * 255 / 100) << 24;
++        softenWallpaper = cfg.clockWallpaperSoften && wallpaperFile != null;
++        if (softenWallpaper) {
++            LinearLayout clock = (LinearLayout) content;
++            if (clock.getLayoutDirection() != View.LAYOUT_DIRECTION_RTL) {
++                clock.setGravity(Gravity.CENTER_HORIZONTAL);
++            }
++            styleClock(clock, ctx.getResources().getDisplayMetrics().density);
++            digitalRain = new DigitalRain(ctx, cfg.animations && !cfg.reducedMotion);
++            ViewGroup parent = (ViewGroup) clock.getParent();
++            parent.addView(digitalRain, parent.indexOfChild(clock), new FrameLayout.LayoutParams(-1, -1));
++        }
+         wallpaperRes = ctx.getResources();
+     }
+ 
+@@ -156,7 +179,11 @@ final class ClockScene {
+         int shade = wallpaperShade;
+         Resources res = wallpaperRes;
+         DisplayMetrics dm = res.getDisplayMetrics();
+-        int w = dm.widthPixels, h = dm.heightPixels;
++        // A smaller filtered background softens fine detail and lowers bitmap memory. The clock
++        // stays at full resolution, and there is no per-frame filtering pass beyond normal drawing.
++        int divisor = softenWallpaper ? 3 : 1;
++        int w = Math.max(1, dm.widthPixels / divisor);
++        int h = Math.max(1, dm.heightPixels / divisor);
+         int generation = ++wallpaperGeneration;
+         new Thread(() -> {
+             Bitmap bmp = decode(file, w, h);
+@@ -167,15 +194,45 @@ final class ClockScene {
+                     return;
+                 }
+                 wallpaperShown = true;
++                if (digitalRain != null) digitalRain.setVisibility(View.VISIBLE);
+                 // As the image, not the background: a background is stretched to the view, so a picture of
+                 // another shape than the screen would be distorted. centerCrop scales and crops it like Home.
+                 ambient.setBackground(null);
+-                ambient.setImageDrawable(new LayerDrawable(new Drawable[]{
+-                        new BitmapDrawable(res, bmp), new ColorDrawable(shade)}));
++                BitmapDrawable picture = new BitmapDrawable(res, bmp);
++                picture.setFilterBitmap(true);
++                ambient.setImageDrawable(new LayerDrawable(new Drawable[]{picture, new ColorDrawable(shade)}));
++                if (softenWallpaper && vignette == null) {
++                    vignette = new GradientDrawable();
++                    vignette.setGradientType(GradientDrawable.RADIAL_GRADIENT);
++                    vignette.setColors(new int[]{0x00000000, 0x12000000, 0x7A000000});
++                    updateVignetteSize();
++                    ambient.setForeground(vignette);
++                }
+             });
+         }, "clock-wallpaper").start();
+     }
+ 
++    private void updateVignetteSize() {
++        vignette.setGradientRadius(Math.max(1f,
++                (float) Math.hypot(ambient.getWidth(), ambient.getHeight()) * 0.56f));
++    }
++
++    private static void styleClock(View view, float density) {
++        if (view instanceof TextClock) {
++            TextClock text = (TextClock) view;
++            text.setShadowLayer(6 * density, 0f, 2 * density, 0xB8000000);
++            if (text.getTextSize() > 70 * density) {
++                text.setTextColor(0xF5FFFFFF);
++                text.setFontFeatureSettings("tnum");
++            } else {
++                text.setTextColor(0xC9FFFFFF);
++            }
++        } else if (view instanceof ViewGroup) {
++            ViewGroup group = (ViewGroup) view;
++            for (int i = 0; i < group.getChildCount(); i++) styleClock(group.getChildAt(i), density);
++        }
++    }
++
+     /** WallpaperPlayer's decode: sampled and scaled down to cover the screen, never bigger than 4K. */
+     private static Bitmap decode(File file, int screenW, int screenH) {
+         try {
+@@ -229,18 +286,19 @@ final class ClockScene {
+ 
+     private void moveClock() {
+         content.animate().alpha(0f).setDuration(900).withLayer().withEndAction(() -> {
+-            placeClock();
++            placeClock(false);
+             content.animate().alpha(1f).setDuration(1200).withLayer().start();
+         }).start();
+     }
+ 
+     /** A random spot that keeps the whole clock on screen, with the glow centred behind it. */
+-    private void placeClock() {
++    private void placeClock(boolean centered) {
+         View parent = (View) content.getParent();
+         int maxX = Math.max(0, parent.getWidth() - content.getWidth());
+         int maxY = Math.max(0, parent.getHeight() - content.getHeight());
+-        float x = maxX * (0.1f + 0.8f * random.nextFloat());
+-        float y = maxY * (0.1f + 0.8f * random.nextFloat());
++        float spread = softenWallpaper ? 0.48f : 0.8f;
++        float x = maxX * (centered ? 0.5f : 0.5f + spread * (random.nextFloat() - 0.5f));
++        float y = maxY * (centered ? 0.5f : 0.5f + spread * (random.nextFloat() - 0.5f));
+         content.setX(x);
+         content.setY(y);
+         if (parent.getWidth() > 0 && parent.getHeight() > 0) {
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/Config.java b/launcher/app/src/main/java/com/gathin/tvhome/Config.java
+index 0d336c94..a624d98f 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/Config.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/Config.java
+@@ -277,10 +277,12 @@ final class Config {
+     final boolean clockWallpaper;
+     /** How dark the clock screensaver's wallpaper is, 0 to 90 % (config.xml, clock_wallpaper_dim). */
+     final int clockWallpaperDim;
++    final boolean clockWallpaperSoften;
+     /** The clock screensaver's coloured glow; false leaves the clock on plain black, e.g. for an OLED (config.xml, clock_glow). */
+     final boolean clockGlow;
+     /** Every app in the dock's row, which scrolls sideways, and no grid below it (config.xml, single_row); needs dock_row. */
+     final boolean singleRow;
++    final boolean appSidebar;
+     /** With single_row, the band runs behind every app in the row, not only the dock apps (config.xml, dock_band_all). */
+     final boolean dockBandAll;
+ 
+@@ -297,7 +299,7 @@ final class Config {
+                    List<RaceWeekend.Race> raceCalendar, boolean cinematicHome, boolean ambientGlow, boolean appGlow, boolean fadeRows, int homeIdleClockMinutes,
+                    boolean keyFilter, boolean dockGlass, String glowStyle, boolean wallpaperCaptions,
+                    boolean handleViewInputs, boolean tileMenu, boolean dockEvenPadding, boolean dockBand, boolean cinematicDots, boolean cinematicWhiteFocus, boolean wifiStatusColor, int cinematicScrim, int cinematicArt,
+-                   Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean volumePausesFilter, boolean homeIgnoreChannelKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly, boolean inputsCecStateOnly,
++                   Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean volumePausesFilter, boolean homeIgnoreChannelKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockWallpaperSoften, boolean clockGlow, String glassStyle, boolean singleRow, boolean appSidebar, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly, boolean inputsCecStateOnly,
+                    int openOnStartNetworkWait, boolean openOnStartOnWake, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock, boolean glowSnap,
+                    boolean settingsKeyClearTask) {
+         this.handleViewInputs = handleViewInputs;
+@@ -340,7 +342,7 @@ final class Config {
+         this.bootToLiveTv = bootToLiveTv;
+         this.openOnStartChoice = openOnStartChoice;
+         this.dockTitle = dockTitle;
+-        this.dockRow = dockRow;
++        this.dockRow = dockRow && !appSidebar;
+         this.topMenu = topMenu;
+         this.launcherSettingsButton = launcherSettingsButton;
+         this.reorderButton = reorderButton;
+@@ -413,8 +415,10 @@ final class Config {
+         this.headerWhite = headerWhite;
+         this.clockWallpaper = clockWallpaper;
+         this.clockWallpaperDim = clockWallpaperDim;
++        this.clockWallpaperSoften = clockWallpaperSoften;
+         this.clockGlow = clockGlow;
+-        this.singleRow = singleRow;
++        this.singleRow = singleRow && !appSidebar;
++        this.appSidebar = appSidebar;
+         this.dockBandAll = dockBandAll;
+         this.glowStyle = glowStyle(glowStyle);
+         this.wallpaperCaptions = wallpaperCaptions;
+@@ -729,7 +733,7 @@ final class Config {
+                 Math.max(0, idleClockMinutes), keyFilter, dockGlass, glowStyle, wallpaperCaptions, handleViewInputs, tileMenu, dockEvenPadding,
+                 dockBand, cinematicDots, cinematicWhiteFocus, wifiStatusColor, cinematicScrim, cinematicArt, wallpaperMoods, gamepadPassthrough,
+                 consumeVolumeKeys, volumePausesFilter, homeIgnoreChannelKeys, powerOnHome, homeLongPressHome, wifiStatusWarnings, topBarApps, showGreeting, headerWhite, clockWallpaper,
+-                Math.max(0, Math.min(90, clockWallpaperDim)), clockGlow, glassStyle, singleRow && dockRow, dockBandAll, lunar, lunarOffset,
++                Math.max(0, Math.min(90, clockWallpaperDim)), json != null && bool(json, "clock_wallpaper_soften", false), clockGlow, glassStyle, singleRow && dockRow, json != null && bool(json, "app_sidebar", false), dockBandAll, lunar, lunarOffset,
+                 dateBelowClock, vpnPill, locale, powerOnHomeAlways, inputsConnectedOnly, inputsCecStateOnly,
+                 Math.max(0, Math.min(600, openOnStartNetworkWait)), openOnStartOnWake, iconOnlyVpn, clockFormat, backOpensClock, glowSnap,
+                 settingsKeyClearTask);
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java b/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java
+index d92b9d62..11f37ef3 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java
+@@ -4,6 +4,8 @@ import android.animation.ArgbEvaluator;
+ import android.animation.ValueAnimator;
+ import android.app.Activity;
+ import android.app.Dialog;
++import android.Manifest;
++import android.annotation.SuppressLint;
+ import android.content.ActivityNotFoundException;
+ import android.content.BroadcastReceiver;
+ import android.content.ComponentName;
+@@ -86,6 +88,7 @@ import java.util.Calendar;
+ import java.util.Collections;
+ import java.util.HashMap;
+ import java.util.HashSet;
++import java.util.LinkedHashSet;
+ import java.util.List;
+ import java.util.Locale;
+ import java.util.Map;
+@@ -102,6 +105,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+ 
+ 
+     private static final int LAUNCHER_SETTINGS_REQUEST = 42;
++    private static final int BLUETOOTH_SETTINGS_REQUEST = 43;
+     /** Sent by QuickSettingsActivity: open Launcher settings from here so Home rebuilds when they close. */
+     static final String ACTION_LAUNCHER_SETTINGS = "com.gathin.tvhome.action.LAUNCHER_SETTINGS";
+     /** Sent by the "library" action word of app_keys: open the App library over Home (needs app_library). */
+@@ -110,6 +114,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     static final String ACTION_VIEW_INPUTS = "com.android.tv.action.VIEW_INPUTS";
+     /** Tiles per row and dock slots (res/values/config.xml, columns). Set in onCreate. */
+     static int COLUMNS = 4;
++    private boolean appSidebar;
+     private boolean rtlAppGrid;
+     private static final long MINUTE_MS = 60_000L;
+     private static final long STATS_MS = 10_000L;
+@@ -174,6 +179,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     private String heroArtKey;
+     /** The focus glow's colour while the cinematic shelf tints it, 0 for plain white glass. */
+     private int glassAccent;
++    private int wallpaperAccent;
+     private int ambientColor = -1;
+     private ValueAnimator ambientAnimator;
+     /** config.xml glow_snap: the glow takes a new colour in one frame instead of the dip-and-fade. */
+@@ -196,7 +202,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     private TextView lunarDate;
+     private boolean lunar;
+     private int lunarOffset;
+-    private TextView stats;
++    private ResourceGauges stats;
+     private List<RaceWeekend.Race> raceCalendar;
+     private View racePanel;
+     private TextView raceKicker, raceHeadline, raceSessions;
+@@ -476,7 +482,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         settingsKeycodes = cfg.settingsKeycodes;
+         settingsKeyPanel = cfg.settingsKeyPanel;
+         settingsKeyClearTask = cfg.settingsKeyClearTask;
+-        COLUMNS = cfg.columns;
++        appSidebar = cfg.appSidebar;
++        COLUMNS = appSidebar ? 1 : cfg.columns;
+         animations = cfg.animations;
+         advancedEffects = cfg.animations && cfg.advancedEffects;
+         reducedMotion = cfg.reducedMotion;
+@@ -577,6 +584,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         btnWifi = findViewById(R.id.btnWifi);
+         shamsiDate = findViewById(R.id.shamsiDate);
+         stats = findViewById(R.id.stats);
++        stats.setOnClickListener(view -> {
++            try {
++                startActivity(new Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS));
++            } catch (ActivityNotFoundException e) {
++                startActivity(new Intent(Settings.ACTION_SETTINGS));
++            }
++        });
+         raceCalendar = cfg.raceCalendar;
+         racePanel = findViewById(R.id.racePanel);
+         raceKicker = findViewById(R.id.raceKicker);
+@@ -616,6 +630,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         libraryExcludedApps = new HashSet<>(cfg.libraryExcludedApps);
+ 
+         grid = findViewById(R.id.grid);
++        if (appSidebar) placeAppSidebar(cfg.dockGlass, cfg.dockOpacity);
+         rtlAppGrid = getResources().getBoolean(R.bool.rtl_app_grid);
+         // Mirror only the app grid; the header and other locales keep their own layouts.
+         // single_row: one span laid out sideways, so the same adapter, glass and dock band serve a scrolling row.
+@@ -698,7 +713,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         }
+         adapter = new AppAdapter(this, this, COLUMNS, cfg);
+         dockApps = cfg.dockApps;
+-        fillDockLeavesSlots = !cfg.fillDock;
++        fillDockLeavesSlots = !appSidebar && !cfg.fillDock;
+         Order savedOrder = Order.load(Order.file(this));
+         adapter.setSavedOrder(Order.ranks(savedOrder, dockApps), Order.docked(savedOrder, dockApps));
+         grid.setAdapter(adapter);
+@@ -917,13 +932,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
+             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                 // Back to the dock tile Up came from, not wherever the focus finder lands.
+-                focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
++                focusTile(singleRow || appSidebar ? lastFocused : lastFocused % COLUMNS);
+                 return true;
+             }
+             int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
+             int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
+             int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
+-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
++            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && v.getId() == leftButton) {
++                if (appSidebar) focusTile(lastFocused);
++                return true;
++            }
+             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
+         };
+         btnInputs.setOnKeyListener(pillKeys);
+@@ -1115,6 +1133,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+             recreate();
+             return;
+         }
++        ((WeatherCard) findViewById(R.id.weatherCard)).reload();
+         restartIdleClock();
+         promptsPaused = false;
+         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
+@@ -1692,7 +1711,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         reordering = false;
+         dimOthers();   // drop() ran while reordering was still on; restore full brightness now the mode is off
+         adapter.setReordering(false);
+-        glass.setAccent(festive ? festival.accentColor() : 0);
++        glass.setAccent(festive ? festival.accentColor() : wallpaperAccent);
+         btnReorder.setActivated(false);
+         List<String> keys = adapter.movableKeys();
+         List<String> before = orderAtStart;
+@@ -1727,6 +1746,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+             drop();
+             return;
+         }
++        if (appSidebar && (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) return;
+         // A single row has no rows to move between: Up and Down leave the carried tile where it is.
+         if (singleRow && (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN)) return;
+         int to;
+@@ -1866,8 +1886,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         // Cinematic shelf: the highlight glows in the dock app's colour, plain white in the grid (and on the dock with
+         // cinematic_white_focus). app_glow: every tile. In a single row every tile is the dock's kind.
+         boolean coloured = (appGlow || cinematic && !cinematicWhiteFocus && (singleRow || position < COLUMNS)) && !festive;
+-        int accent = coloured ? adapter.ambientColorAt(position) : 0;
+-        if ((cinematic || appGlow) && !festive && accent != glassAccent) {
++        int accent = coloured ? adapter.ambientColorAt(position) : wallpaperAccent;
++        if (!reordering && (cinematic || appGlow || appSidebar) && !festive && accent != glassAccent) {
+             glassAccent = accent;
+             glass.setAccent(accent);
+         }
+@@ -1912,6 +1932,88 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         }
+     }
+ 
++    private void placeAppSidebar(boolean frosted, int opacity) {
++        FrameLayout appPane = (FrameLayout) grid.getParent();
++        LinearLayout content = (LinearLayout) appPane.getParent();
++        View header = content.getChildAt(0);
++        content.setOrientation(LinearLayout.HORIZONTAL);
++        content.setPadding(Math.round(26 * density), content.getPaddingTop(),
++                content.getPaddingRight(), content.getPaddingBottom());
++        content.removeView(appPane);
++        LinearLayout.LayoutParams pane = new LinearLayout.LayoutParams(
++                Math.round(78 * density), ViewGroup.LayoutParams.MATCH_PARENT);
++        pane.rightMargin = Math.round(20 * density);
++        content.addView(appPane, 0, pane);
++        GradientDrawable glassBand = null;
++        if (frosted) {
++            int alpha = Math.round(150 * opacity / 100f);
++            glassBand = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
++                    new int[]{(alpha << 24) | 0x64778B, (alpha << 24) | 0x192633});
++            glassBand.setCornerRadius(18 * density);
++            glassBand.setStroke(Math.max(1, Math.round(density)), 0x4DDAE8F5);
++            appPane.setBackground(glassBand);
++            pane.bottomMargin = Math.round(16 * density);
++        }
++        header.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
++        ((TextView) findViewById(R.id.clock)).setTextSize(42f);
++        WeatherCard weather = findViewById(R.id.weatherCard);
++        placeSidebarWidgets(header, weather);
++        GradientDrawable sidebarGlass = glassBand;
++        wallpaperPlayer.setAccentListener(accent -> {
++            wallpaperAccent = accent;
++            if (sidebarGlass != null) {
++                int alpha = Math.round(150 * opacity / 100f);
++                sidebarGlass.setColors(new int[]{
++                        tint(accent, 0x64778B, accent == 0 ? 0f : 0.55f, alpha),
++                        tint(accent, 0x192633, accent == 0 ? 0f : 0.20f, alpha)});
++                sidebarGlass.setStroke(Math.max(1, Math.round(density)), tint(accent, 0xDAE8F5, accent == 0 ? 0f : 0.4f, 77));
++            }
++            stats.setWallpaperAccent(accent);
++            weather.setWallpaperAccent(accent);
++            if (!festive && !reordering && !cinematic && !appGlow) {
++                glassAccent = accent;
++                glass.setAccent(accent);
++            }
++        });
++    }
++
++    private void placeSidebarWidgets(View header, WeatherCard weather) {
++        ViewGroup headerLayout = (ViewGroup) header;
++        headerLayout.removeView(stats);
++        headerLayout.removeView(weather);
++        stats.setCardScale(0.58f);
++        stats.showNetworkRates();
++        weather.setCardScale(0.82f);
++        WeatherBackdrop weatherBackdrop = new WeatherBackdrop(this);
++        int skyIndex = root.indexOfChild(findViewById(R.id.sky));
++        root.addView(weatherBackdrop, skyIndex + 1, new FrameLayout.LayoutParams(
++                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        weather.useCompactLayout(weatherBackdrop);
++        LinearLayout widgets = new LinearLayout(this);
++        widgets.setGravity(Gravity.CENTER_VERTICAL);
++        FrameLayout.LayoutParams position = new FrameLayout.LayoutParams(
++                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
++                Gravity.BOTTOM | Gravity.LEFT);
++        position.leftMargin = Math.round(124 * density);
++        position.bottomMargin = Math.round(22 * density);
++        root.addView(widgets, position);
++        widgets.addView(stats, new LinearLayout.LayoutParams(
++                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++        FrameLayout.LayoutParams weatherPosition = new FrameLayout.LayoutParams(
++                Math.round(284 * density), stats.getMinHeight(), Gravity.BOTTOM | Gravity.RIGHT);
++        weatherPosition.rightMargin = root.getResources().getConfiguration().screenWidthDp < 860
++                ? Math.round(20 * density) : Math.round(56 * density);
++        weatherPosition.bottomMargin = position.bottomMargin;
++        root.addView(weather, weatherPosition);
++    }
++
++    static int tint(int accent, int base, float amount, int alpha) {
++        return Color.argb(alpha,
++                Math.round(Color.red(base) + (Color.red(accent) - Color.red(base)) * amount),
++                Math.round(Color.green(base) + (Color.green(accent) - Color.green(base)) * amount),
++                Math.round(Color.blue(base) + (Color.blue(accent) - Color.blue(base)) * amount));
++    }
++
+     /** Refits the glass to the focused holder once the grid layout and tile dimensions settle. */
+     private void refitGlass() {
+         if (isDestroyed() || adapter.appCount() == 0 || libraryFocusPending) return;
+@@ -2283,9 +2385,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     private void startStats() {
+         if (statsThread != null) return;
+         stats.setVisibility(View.VISIBLE);
+-        cpuTotalPrev = -1;
+-        idlePrev = -1;
+-        procStatDead = false;
++        stats.setWavesRunning(animations && !reducedMotion);
+         statsThread = new HandlerThread("stats");
+         statsThread.start();
+         // Each start gets its own handler, held by its task: stopStats on the main thread can clear the field
+@@ -2293,20 +2393,58 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         Handler bg = new Handler(statsThread.getLooper());
+         statsBg = bg;
+         bg.post(new Runnable() {
++            private long lastTx = -1, lastRx = -1, lastTime;
++
+             @Override
+             public void run() {
+                 if (statsBg != bg) return;
+-                String line = readStatsLine();
++                long[] memory = memUsedOfTotalMb();
++                File partition = Environment.getDataDirectory();
++                long free = partition.getFreeSpace();
++                long capacity = partition.getTotalSpace();
++                StringBuilder line = new StringBuilder();
++                if (memory != null) appendStat(line, getString(R.string.stats_memory, memory[0], memory[1]));
++                String formattedFree = formatGb(getResources(), free);
++                if (!formattedFree.isEmpty()) appendStat(line, getString(R.string.stats_storage, formattedFree));
++                String label = StatsText.forLocale(line.toString(), getResources().getConfiguration().getLocales().get(0));
++                String ramUsed = memory == null ? "" : formatGb(getResources(), memory[0] * 1048576L);
++                float memoryUsed = memory == null ? 0f : utilization(memory[0], memory[1]);
++                float storageUsed = utilization(capacity - free, capacity);
++                String upload = "—", download = "—";
++                if (appSidebar) {
++                    long tx = android.net.TrafficStats.getTotalTxBytes();
++                    long rx = android.net.TrafficStats.getTotalRxBytes();
++                    long now = SystemClock.elapsedRealtime();
++                    upload = networkRate(tx, lastTx, now - lastTime);
++                    download = networkRate(rx, lastRx, now - lastTime);
++                    lastTx = tx;
++                    lastRx = rx;
++                    lastTime = now;
++                }
++                String up = upload, down = download;
++                String description = appSidebar ? label + " · ↑ " + up + " · ↓ " + down : label;
+                 handler.post(() -> {
+-                    if (showStats && stats != null && statsBg == bg) stats.setText(line);
++                    if (showStats && statsBg == bg) {
++                        stats.update(description, ramUsed, formattedFree, memoryUsed, storageUsed, animations && !reducedMotion);
++                        if (appSidebar) stats.setNetworkRates(up, down);
++                    }
+                 });
+                 if (statsBg == bg) bg.postDelayed(this, STATS_MS);
+             }
+         });
+     }
+ 
++    private static String networkRate(long total, long previous, long elapsedMs) {
++        if (previous < 0 || total < previous || elapsedMs <= 0) return "—";
++        double kbps = (total - previous) * 8.0 / elapsedMs;
++        return kbps >= 1000
++                ? String.format(Locale.getDefault(), "%.1f Mbps", kbps / 1000)
++                : String.format(Locale.getDefault(), "%.0f kbps", kbps);
++    }
++
+     private void stopStats() {
+         if (statsThread == null) return;
++        stats.setWavesRunning(false);
+         statsBg.removeCallbacksAndMessages(null);
+         statsThread.quit();
+         statsThread = null;
+@@ -2322,110 +2460,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         line.append(part);
+     }
+ 
+-    private String readStatsLine() {
+-        int cpu = cpuPercent();
+-        if (cpu < 0) {
+-            try {
+-                Thread.sleep(200);             // second sample, so the first line already has a CPU figure
+-            } catch (InterruptedException e) {
+-                Thread.currentThread().interrupt();
+-                return "";
+-            }
+-            cpu = cpuPercent();
+-        }
+-        // Android 8 and later hide /proc/stat from apps on many TVs: then the line leaves CPU out rather than
+-        // showing a dash that never fills in.
+-        StringBuilder line = new StringBuilder();
+-        if (cpu >= 0) line.append(getString(R.string.stats_cpu, cpu));
+-        long[] mem = memUsedOfTotalMb();
+-        if (mem != null) appendStat(line, getString(R.string.stats_memory, mem[0], mem[1]));
+-        String free = formatGb(getResources(), Environment.getDataDirectory().getFreeSpace());
+-        if (!free.isEmpty()) appendStat(line, getString(R.string.stats_storage, free));
+-        return StatsText.forLocale(line.toString(), getResources().getConfiguration().getLocales().get(0));
+-    }
+-
+-    // -1: need another sample. -2: this source cannot be read (Android 9 hides /proc/stat from apps).
+-    private static final int CPU_UNREADABLE = -2;
+-    private long cpuTotalPrev = -1, cpuIdlePrev = -1;
+-    private boolean procStatDead;
+-    private long idlePrev = -1, wallPrev = -1;
+-
+-    private int cpuPercent() {
+-        if (!procStatDead) {
+-            int fromStat = cpuFromProcStat();
+-            if (fromStat != CPU_UNREADABLE) return fromStat;
+-            procStatDead = true;
+-            idlePrev = -1;
+-        }
+-        return cpuFromIdle();
+-    }
+-
+-    private int cpuFromProcStat() {
+-        String s = readFirstLine("/proc/stat");
+-        if (s == null || !s.startsWith("cpu")) return CPU_UNREADABLE;
+-        String[] t = s.trim().split("\\s+");
+-        if (t.length < 5) return CPU_UNREADABLE;
+-        try {
+-            long user = Long.parseLong(t[1]), nice = Long.parseLong(t[2]), sys = Long.parseLong(t[3]);
+-            long idle = Long.parseLong(t[4]);
+-            long iowait = t.length > 5 ? Long.parseLong(t[5]) : 0;
+-            long irq = t.length > 6 ? Long.parseLong(t[6]) : 0;
+-            long soft = t.length > 7 ? Long.parseLong(t[7]) : 0;
+-            long total = user + nice + sys + idle + iowait + irq + soft;
+-            long idleAll = idle + iowait;
+-            if (cpuTotalPrev < 0) {
+-                cpuTotalPrev = total;
+-                cpuIdlePrev = idleAll;
+-                return -1;
+-            }
+-            long dt = total - cpuTotalPrev, di = idleAll - cpuIdlePrev;
+-            cpuTotalPrev = total;
+-            cpuIdlePrev = idleAll;
+-            if (dt <= 0) return -1;
+-            int busy = (int) Math.round((dt - di) * 100.0 / dt);
+-            return Math.max(0, Math.min(100, busy));
+-        } catch (NumberFormatException e) {
+-            return CPU_UNREADABLE;
+-        }
+-    }
+-
+-    /** Busy percent from cpuidle time (microseconds) across the cores. -1 until the second sample. */
+-    private int cpuFromIdle() {
+-        long idle = 0;
+-        int cores = 0;
+-        for (int i = 0; i < 8; i++) {
+-            boolean any = false;
+-            for (int state = 0; state < 8; state++) {
+-                String t = readFirstLine("/sys/devices/system/cpu/cpu" + i
+-                        + "/cpuidle/state" + state + "/time");
+-                if (t == null) break;
+-                try {
+-                    idle += Long.parseLong(t.trim());
+-                    any = true;
+-                } catch (NumberFormatException e) {
+-                    break;
+-                }
+-            }
+-            if (!any) break;
+-            cores++;
+-        }
+-        if (cores == 0) return -1;
+-        long wall = SystemClock.elapsedRealtime() * 1000L;
+-        if (idlePrev < 0) {
+-            idlePrev = idle;
+-            wallPrev = wall;
+-            return -1;
+-        }
+-        long di = idle - idlePrev;
+-        long dw = (wall - wallPrev) * cores;
+-        idlePrev = idle;
+-        wallPrev = wall;
+-        if (dw <= 0) return -1;
+-        int busy = (int) Math.round((dw - di) * 100.0 / dw);
+-        return Math.max(0, Math.min(100, busy));
+-    }
+-
+-    /** RAM usage as {used, total} in MB (MemInfo.usedOfTotalMb); null when /proc/meminfo cannot be read. */
++    private static float utilization(long used, long capacity) {
++        return capacity <= 0 ? 0f : Math.max(0f, Math.min(1f, (float) used / capacity));
++    }
++
+     private long[] memUsedOfTotalMb() {
+         java.util.List<String> lines = new java.util.ArrayList<>();
+         try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader("/proc/meminfo"))) {
+@@ -2436,14 +2474,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         return MemInfo.usedOfTotalMb(lines);
+     }
+ 
+-    private static String readFirstLine(String path) {
+-        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(path))) {
+-            return r.readLine();
+-        } catch (IOException e) {
+-            return null;
+-        }
+-    }
+-
+     private static String formatGb(Resources res, long bytes) {
+         if (bytes <= 0) return "";
+         double gb = bytes / (1024.0 * 1024 * 1024);
+@@ -2457,6 +2487,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     public boolean onTileVerticalKey(int position, int keyCode) {
+         int count = adapter.appCount();
+         int target;
++        if (appSidebar && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
++                || keyCode == KeyEvent.KEYCODE_DPAD_UP && position == 0)) {
++            if (btnInputs.getVisibility() == View.VISIBLE) btnInputs.requestFocus();
++            else firstTopButton().requestFocus();
++            return true;
++        }
+         if (singleRow) {
+             // One row: Up leaves for the top bar, Down has nowhere to go, and Left/Right walk the whole row,
+             // stopping at its two ends (the default focus search scrolls the row to the next tile).
+@@ -3159,13 +3195,78 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         return 0xFF000000 | (r << 16) | (g << 8) | b;
+     }
+ 
+-    /**
+-     * The network pill opens the VPN app when one is configured and installed, otherwise Wi-Fi settings. With
+-     * vpn_pill the VPN app has its own pill, so this one always opens Wi-Fi settings.
+-     */
+     private void openNetworkPill() {
+-        Intent i = vpnPill ? null : vpnAppIntent();
+-        open(i != null ? i : systemIntent(Settings.ACTION_WIFI_SETTINGS));
++        CharSequence connection = wifiIconOnly ? btnWifi.getContentDescription() : btnWifi.getText();
++        String status = TextUtils.isEmpty(connection) ? getString(R.string.wifi) : connection.toString();
++        Intent vpn = vpnPill ? null : vpnAppIntent();
++        WirelessPanel panel = new WirelessPanel(this, status, nearbyWifiNames(), animations && !reducedMotion,
++                () -> {
++                    if (openPopup != null) openPopup.dismiss();
++                    open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
++                },
++                () -> {
++                    if (openPopup != null) openPopup.dismiss();
++                    openBluetoothSettings();
++                }, vpn == null ? null : () -> {
++                    if (openPopup != null) openPopup.dismiss();
++                    open(vpn);
++                });
++        PopupWindow popup = glassPopup(panel, Math.round(WirelessPanel.WIDTH * density));
++        popup.setHeight(Math.round(WirelessPanel.HEIGHT * density));
++        popup.showAtLocation(root, Gravity.CENTER, 0, 0);
++        panel.focusTabs();
++    }
++
++    @SuppressLint("MissingPermission")
++    private String[] nearbyWifiNames() {
++        WifiManager wifi = getApplicationContext().getSystemService(WifiManager.class);
++        if (wifi == null || checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
++                != PackageManager.PERMISSION_GRANTED) return new String[0];
++        try {
++            List<android.net.wifi.ScanResult> networks = new ArrayList<>(wifi.getScanResults());
++            networks.sort((first, second) -> Integer.compare(second.level, first.level));
++            Set<String> names = new LinkedHashSet<>();
++            for (android.net.wifi.ScanResult result : networks) {
++                if (!TextUtils.isEmpty(result.SSID)) names.add(result.SSID);
++                if (names.size() == 6) break;
++            }
++            return names.toArray(new String[0]);
++        } catch (SecurityException ignored) {
++            return new String[0];
++        }
++    }
++
++    private void openBluetoothSettings() {
++        try {
++            startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
++        } catch (ActivityNotFoundException | SecurityException e) {
++            if (Build.VERSION.SDK_INT >= 31
++                    && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
++                requestPermissions(new String[] {Manifest.permission.BLUETOOTH_CONNECT}, BLUETOOTH_SETTINGS_REQUEST);
++            } else {
++                openTvAccessorySettings();
++            }
++        }
++    }
++
++    private void openTvAccessorySettings() {
++        try {
++            startActivity(new Intent("com.google.android.intent.action.CONNECT_INPUT")
++                    .setPackage("com.android.tv.settings"));
++        } catch (ActivityNotFoundException | SecurityException e) {
++            open(systemIntent(Settings.ACTION_SETTINGS));
++        }
++    }
++
++    @Override
++    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
++        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
++        if (requestCode != BLUETOOTH_SETTINGS_REQUEST) return;
++        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
++            openTvAccessorySettings();
++        } else {
++            open(systemIntent(Settings.ACTION_SETTINGS));
++        }
+     }
+ 
+     /** vpn_app's launch intent, or null when none is set or it is not installed. */
+@@ -3709,7 +3810,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         PopupWindow popup = glassPopup(panel, (int) (220 * density));
+         // Inputs opens its own list once this one has closed.
+         if (showInputsMenuRow) addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.inputs), -1, () -> root.post(this::showInputs));
+-        addInputRow(rows, popup, R.drawable.ic_wifi, getString(R.string.quick_network), -1, this::openNetworkPill);
++        addInputRow(rows, popup, R.drawable.ic_wifi, getString(R.string.quick_network), -1, () -> root.post(this::openNetworkPill));
+         CharSequence network = wifiIconOnly ? btnWifi.getContentDescription() : btnWifi.getText();
+         if (!TextUtils.isEmpty(network)) {
+             TextView status = rows.getChildAt(rows.getChildCount() - 1).findViewById(R.id.status);
+@@ -3736,6 +3837,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+         LinearLayout rows = panel.findViewById(R.id.rows);
+         PopupWindow popup = glassPopup(panel, (int) (200 * density));
++        if (appSidebar) addSettingsMenuRow(rows, popup, R.string.wallpaper_label,
++                () -> WallpaperMenu.show(this, this::recreate));
+         if (!launcherSettingsButton) addSettingsMenuRow(rows, popup, R.string.launcher_settings, () -> startActivityForResult(
+                 new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST));
+         // Firmware that ships its own settings app next to the AOSP one (Xiaomi China is one): the
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
+index 1d52a51c..f45c81ed 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
+@@ -4,6 +4,7 @@ import android.content.Context;
+ import android.content.SharedPreferences;
+ import android.graphics.Bitmap;
+ import android.graphics.BitmapFactory;
++import android.graphics.Color;
+ import android.graphics.Canvas;
+ import android.text.TextUtils;
+ import android.util.DisplayMetrics;
+@@ -48,6 +49,8 @@ final class WallpaperPlayer {
+     private final int dimColor;
+     /** The picture on screen, released once the next one has been drawn. */
+     private Bitmap current;
++    private File currentFile;
++    private java.util.function.IntConsumer onAccent;
+     private boolean active;
+     private boolean closed;
+     private boolean loading;
+@@ -113,7 +116,7 @@ final class WallpaperPlayer {
+         while (first != null) {
+             Bitmap bitmap = decode(first);
+             if (bitmap != null) {
+-                show(bitmap);
++                show(bitmap, first);
+                 // The picture covers the whole screen: the root's plain colour under it is overdraw.
+                 root.setBackground(null);
+                 displayed = first.getName();
+@@ -194,7 +197,7 @@ final class WallpaperPlayer {
+                     update();
+                     return;
+                 }
+-                show(bitmap);
++                show(bitmap, next);
+                 displayed = next.getName();
+                 showCaption(true);
+                 if (!displayed.equals(previous) || changed == 0) {
+@@ -284,15 +287,63 @@ final class WallpaperPlayer {
+     }
+ 
+     /** Puts a picture on screen and releases the previous one after a frame has drawn the new one. */
+-    private void show(Bitmap bitmap) {
++    private void show(Bitmap bitmap, File file) {
+         Bitmap old = current;
+         current = bitmap;
++        currentFile = file;
+         // The wallpaper covers the whole root; avoid drawing the fallback colour under it.
+         root.setBackground(null);
+         image.setImageBitmap(bitmap);
++        if (onAccent != null) onAccent.accept(accentOf(file));
+         if (old != null && old != bitmap) image.postDelayed(old::recycle, 500);
+     }
+ 
++    void setAccentListener(java.util.function.IntConsumer listener) {
++        onAccent = listener;
++        if (current != null) listener.accept(accentOf(currentFile));
++    }
++
++    /** Ignore low-colour and near-black pixels so dark aerial photos still contribute a hue. */
++    private static int accentOf(File file) {
++        BitmapFactory.Options options = new BitmapFactory.Options();
++        options.inJustDecodeBounds = true;
++        BitmapFactory.decodeFile(file.getPath(), options);
++        options.inSampleSize = 1;
++        while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > 360) {
++            options.inSampleSize *= 2;
++        }
++        options.inJustDecodeBounds = false;
++        options.inPreferredConfig = Bitmap.Config.ARGB_8888;
++        options.inMutable = true; // Require a small CPU-readable bitmap; the displayed image lives on the GPU.
++        Bitmap sample = BitmapFactory.decodeFile(file.getPath(), options);
++        if (sample == null) return 0;
++        try {
++            return sampleAccent(sample);
++        } finally {
++            sample.recycle();
++        }
++    }
++
++    private static int sampleAccent(Bitmap bitmap) {
++        float[] bins = new float[24];
++        float[] hsv = new float[3];
++        for (int y = 0; y < 24; y++) {
++            for (int x = 0; x < 36; x++) {
++                int rgb = bitmap.getPixel((2 * x + 1) * bitmap.getWidth() / 72,
++                        (2 * y + 1) * bitmap.getHeight() / 48);
++                Color.colorToHSV(rgb, hsv);
++                if (hsv[1] > 0.22f && hsv[2] > 0.16f) {
++                    bins[Math.min(23, (int) (hsv[0] / 15))] += hsv[1] * hsv[2];
++                }
++            }
++        }
++        int best = 0;
++        for (int i = 1; i < bins.length; i++) {
++            if (bins[i] > bins[best]) best = i;
++        }
++        return bins[best] == 0 ? 0 : Color.HSVToColor(new float[]{best * 15 + 7.5f, 0.52f, 0.87f});
++    }
++
+     private Bitmap decode(File file) {
+         try {
+             BitmapFactory.Options options = new BitmapFactory.Options();
+diff --git a/launcher/app/src/main/res/layout-iw/activity_main.xml b/launcher/app/src/main/res/layout-iw/activity_main.xml
+index 299dedb0..543bbdac 100644
+--- a/launcher/app/src/main/res/layout-iw/activity_main.xml
++++ b/launcher/app/src/main/res/layout-iw/activity_main.xml
+@@ -317,7 +317,7 @@
+ 
+             <!-- Shown only when show_stats is on. Outside leftBlock, so the top buttons stay level with the clock
+                  row; gone, it takes no space. -->
+-            <TextView
++            <com.gathin.tvhome.ResourceGauges
+                 android:id="@+id/stats"
+                 android:layout_width="wrap_content"
+                 android:layout_below="@id/leftBlock"
+@@ -334,7 +334,7 @@
+                 android:textSize="14sp"
+                 android:fontFamily="@string/font_medium"
+                 android:letterSpacing="0.04"
+-                android:focusable="false"
++                android:focusable="true"
+                 android:visibility="gone" />
+ 
+             <LinearLayout
+@@ -395,6 +395,15 @@
+                     android:drawableStart="@drawable/ic_input"
+                     android:nextFocusDown="@+id/grid" />
+             </LinearLayout>
++
++            <com.gathin.tvhome.WeatherCard
++                android:id="@+id/weatherCard"
++                android:layout_width="324dp"
++                android:layout_height="wrap_content"
++                android:layout_below="@id/topButtons"
++                android:layout_alignParentStart="true"
++                android:layout_marginTop="8dp"
++                android:visibility="gone" />
+         </RelativeLayout>
+ 
+         <!-- The wrapper clips at the grid's edge; the grid itself must not clip so scaled tiles can overflow their cells. -->
+diff --git a/launcher/app/src/main/res/layout/activity_main.xml b/launcher/app/src/main/res/layout/activity_main.xml
+index 4dd006b4..9ad5dcc6 100644
+--- a/launcher/app/src/main/res/layout/activity_main.xml
++++ b/launcher/app/src/main/res/layout/activity_main.xml
+@@ -305,7 +305,7 @@
+ 
+             <!-- Shown only when show_stats is on. Outside leftBlock, so the top buttons stay level with the clock
+                  row; gone, it takes no space. -->
+-            <TextView
++            <com.gathin.tvhome.ResourceGauges
+                 android:id="@+id/stats"
+                 android:layout_width="wrap_content"
+                 android:layout_below="@id/leftBlock"
+@@ -319,7 +319,7 @@
+                 android:textSize="14sp"
+                 android:fontFamily="@string/font_medium"
+                 android:letterSpacing="0.04"
+-                android:focusable="false"
++                android:focusable="true"
+                 android:visibility="gone" />
+ 
+             <LinearLayout
+@@ -380,6 +380,15 @@
+                     android:drawableStart="@drawable/ic_settings"
+                     android:nextFocusDown="@+id/grid" />
+             </LinearLayout>
++
++            <com.gathin.tvhome.WeatherCard
++                android:id="@+id/weatherCard"
++                android:layout_width="324dp"
++                android:layout_height="wrap_content"
++                android:layout_below="@id/topButtons"
++                android:layout_alignParentEnd="true"
++                android:layout_marginTop="8dp"
++                android:visibility="gone" />
+         </RelativeLayout>
+ 
+         <!-- The wrapper clips at the grid's edge; the grid itself must not clip so scaled tiles can overflow their cells. -->
+diff --git a/launcher/app/src/main/res/values/strings.xml b/launcher/app/src/main/res/values/strings.xml
+index 2b2b53eb..57e2f2ab 100644
+--- a/launcher/app/src/main/res/values/strings.xml
++++ b/launcher/app/src/main/res/values/strings.xml
+@@ -40,6 +40,8 @@
+     <string name="shamsi_month_esfand">Esfand</string>
+     <string name="stats_cpu">CPU %1$d%%</string>
+     <string name="stats_memory">Memory %1$d / %2$d MB</string>
++    <string name="gauge_ram" translatable="false">RAM</string>
++    <string name="gauge_disk" translatable="false">DISK</string>
+     <string name="stats_storage">Storage %1$s free</string>
+     <string name="storage_gb_whole">%1$.0f GB</string>
+     <string name="storage_gb_decimal">%1$.1f GB</string>
+@@ -68,6 +70,9 @@
+     <string name="follow_theme_hint">Uses the current theme or built-in layout and motion settings. Pushing or resetting a theme also clears your on-TV choices.</string>
+     <string name="tv_settings">TV system settings</string>
+     <string name="quick_picture">Display</string>
++    <string name="quick_wifi">Wi-Fi &amp; network</string>
++    <string name="quick_bluetooth">Bluetooth &amp; accessories</string>
++    <string name="quick_vpn">VPN</string>
+     <string name="quick_network">Network</string>
+     <string name="quick_apps">Apps</string>
+     <string name="quick_apps_hint">Re-enable</string>
+@@ -158,4 +163,7 @@
+     <string name="clock_format_system">System</string>
+     <string name="clock_format_12">12-hour</string>
+     <string name="clock_format_24">24-hour</string>
++    <string name="weather_feels_like" translatable="false">Feels like %1$s</string>
++    <string name="weather_label" translatable="false">Weather</string>
++    <string name="weather_unavailable" translatable="false">Forecast unavailable</string>
+ </resources>
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/DigitalRain.java b/launcher/app/src/main/java/com/gathin/tvhome/DigitalRain.java
+new file mode 100644
+index 00000000..0b8d8b66
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/DigitalRain.java
+@@ -0,0 +1,63 @@
++package com.gathin.tvhome;
++
++import android.animation.ValueAnimator;
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.Typeface;
++import android.os.SystemClock;
++import android.view.View;
++
++/** Sparse, translucent glyph trails rendered behind the screensaver clock. */
++final class DigitalRain extends View {
++    private static final String GLYPHS = "01ナミキホヤエフワヲコソニハ";
++    private static final int COLUMNS = 13;
++    private static final long FRAME_MS = 80;
++    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final float lineHeight;
++    private final boolean motion;
++    private boolean running;
++    private long startedAt;
++
++    DigitalRain(Context context, boolean motion) {
++        super(context);
++        this.motion = motion;
++        float density = getResources().getDisplayMetrics().density;
++        lineHeight = 15 * density;
++        paint.setTextSize(12 * density);
++        paint.setTextAlign(Paint.Align.CENTER);
++        paint.setTypeface(Typeface.MONOSPACE);
++        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
++        setVisibility(GONE);
++    }
++
++    void setRunning(boolean running) {
++        if (this.running == running) return;
++        this.running = running;
++        if (running) startedAt = SystemClock.uptimeMillis();
++        invalidate();
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        if (!running) return;
++        boolean animate = motion && ValueAnimator.areAnimatorsEnabled();
++        long elapsed = animate ? SystemClock.uptimeMillis() - startedAt : 0;
++        for (int column = 0; column < COLUMNS; column++) {
++            float x = getWidth() * (column + 0.6f + (column % 3) * 0.12f) / COLUMNS;
++            float length = (6 + column % 5) * lineHeight;
++            float travel = getHeight() + length;
++            float head = (column * 0.381966f * travel + elapsed * lineHeight * (0.003f + (column % 4) * 0.0009f))
++                    % travel;
++            int headRow = (int) (head / lineHeight);
++            for (int trail = 0; trail < 6 + column % 5; trail++) {
++                float y = (headRow - trail) * lineHeight;
++                if (y < 0 || y > getHeight() + lineHeight) continue;
++                int glyph = Math.floorMod(column * 7 + (headRow - trail) * 11 + trail, GLYPHS.length());
++                paint.setColor(trail == 0 ? 0x997BFAC0 : 0x0043EA95 | ((62 - 6 * trail) << 24));
++                canvas.drawText(GLYPHS, glyph, glyph + 1, x, y, paint);
++            }
++        }
++        if (animate && isShown()) postInvalidateDelayed(FRAME_MS);
++    }
++}
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/ResourceGauges.java b/launcher/app/src/main/java/com/gathin/tvhome/ResourceGauges.java
+new file mode 100644
+index 00000000..92aa8dc3
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/ResourceGauges.java
+@@ -0,0 +1,222 @@
++package com.gathin.tvhome;
++
++import android.animation.ValueAnimator;
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.graphics.RectF;
++import android.graphics.Typeface;
++import android.os.SystemClock;
++import java.text.NumberFormat;
++import android.util.AttributeSet;
++import android.view.animation.LinearInterpolator;
++import android.widget.TextView;
++
++/** Two resource cards with animated, bottom-up liquid fills. */
++public final class ResourceGauges extends TextView {
++    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Typeface cardTypeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD);
++    private final Path path = new Path();
++    private final RectF track = new RectF();
++    private final float density;
++    private float cardScale = 1f;
++    private boolean showNetwork;
++    private String upload = "—";
++    private String download = "—";
++    private int ramColor = 0xFFCCD7F8;
++    private int networkColor = 0xFF53647F;
++    private int diskColor = 0xFFABB8EC;
++    private ValueAnimator animator;
++    private float memory;
++    private float storage;
++    private boolean wavesRunning;
++    private float waveProgress = 1f;
++    private String memoryValue = "";
++    private String storageFree = "";
++    private String storageUsed = "";
++
++    public ResourceGauges(Context context, AttributeSet attrs) {
++        super(context, attrs);
++        density = getResources().getDisplayMetrics().density;
++        setCardScale(1f);
++    }
++
++    void setCardScale(float scale) {
++        cardScale = scale;
++        setMinWidth(Math.round((showNetwork ? 617 : 408) * density * scale));
++        setMinHeight(Math.round(106 * density * scale));
++    }
++
++    void showNetworkRates() {
++        showNetwork = true;
++        setCardScale(cardScale);
++    }
++
++    void setNetworkRates(String up, String down) {
++        upload = up;
++        download = down;
++        invalidate();
++    }
++
++    void setWallpaperAccent(int accent) {
++        networkColor = MainActivity.tint(accent, 0x37445B, accent == 0 ? 0f : 0.23f, 255);
++        ramColor = MainActivity.tint(accent, 0xF5F5FF, accent == 0 ? 0f : 0.45f, 255);
++        diskColor = MainActivity.tint(accent, 0xDBE0FA, accent == 0 ? 0f : 0.55f, 255);
++        if (accent == 0) {
++            ramColor = 0xFFCCD7F8;
++            diskColor = 0xFFABB8EC;
++        }
++        invalidate();
++    }
++
++    void setWavesRunning(boolean running) {
++        wavesRunning = running;
++        invalidate();
++    }
++
++    void update(String description, String ramUsed, String diskFree, float memoryTarget,
++                float storageTarget, boolean animate) {
++        setContentDescription(description);
++        memoryValue = ramUsed;
++        storageFree = diskFree;
++        storageUsed = NumberFormat.getPercentInstance(
++                getResources().getConfiguration().getLocales().get(0)).format(storageTarget);
++        if (animator != null) animator.cancel();
++        if (!animate || (memory == memoryTarget && storage == storageTarget)) {
++            memory = memoryTarget;
++            storage = storageTarget;
++            waveProgress = 1f;
++            invalidate();
++            return;
++        }
++        float memoryStart = memory;
++        float storageStart = storage;
++        animator = ValueAnimator.ofFloat(0f, 1f);
++        animator.setDuration(900L);
++        animator.setInterpolator(new LinearInterpolator());
++        animator.addUpdateListener(value -> {
++            waveProgress = (float) value.getAnimatedValue();
++            float remaining = 1f - waveProgress;
++            float progress = 1f - remaining * remaining * remaining;
++            memory = memoryStart + (memoryTarget - memoryStart) * progress;
++            storage = storageStart + (storageTarget - storageStart) * progress;
++            invalidate();
++        });
++        animator.start();
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        boolean animate = wavesRunning && isShown() && hasWindowFocus()
++                && ValueAnimator.areAnimatorsEnabled();
++        double phase = animate ? (SystemClock.uptimeMillis() % 2100L) * (2 * Math.PI / 2100) : 0;
++        float gap = 10 * density;
++        float width = getWidth() / cardScale;
++        float cardWidth = (width - (showNetwork ? 2 : 1) * gap) / (showNetwork ? 3 : 2);
++        float diskLeft = cardWidth + gap;
++        int saved = canvas.save();
++        canvas.scale(cardScale, cardScale);
++        drawCard(canvas, 0, cardWidth, memory, ramColor,
++                getResources().getString(R.string.gauge_ram), "", memoryValue, phase);
++        drawCard(canvas, diskLeft, diskLeft + cardWidth, storage, diskColor,
++                getResources().getString(R.string.gauge_disk), storageFree, storageUsed, phase + Math.PI / 2);
++        if (showNetwork) drawNetwork(canvas, 2 * (cardWidth + gap), width, phase + Math.PI);
++        canvas.restoreToCount(saved);
++        if (animate) postInvalidateDelayed(33L);
++    }
++
++    private void drawCard(Canvas canvas, float left, float right, float fraction, int color,
++                          String title, String detail, String value, double phase) {
++        float top = density;
++        float bottom = getHeight() / cardScale - density;
++        float radius = 12 * density;
++        track.set(left + density, top, right - density, bottom);
++        paint.setColor(0xE91C1D2B);
++        canvas.drawRoundRect(track, radius, radius, paint);
++
++        float level = bottom - track.height() * fraction;
++        float clearance = Math.min(level - top, bottom - level);
++        float amplitude = Math.min(clearance, density * (1.5f + 3.5f * (1f - waveProgress)));
++        if (fraction > 0f) {
++            drawLiquid(canvas, level, amplitude, phase, color);
++        }
++
++        paint.setTypeface(cardTypeface);
++        paint.setColor(0xFFE0E4F0);
++        paint.setTextAlign(Paint.Align.RIGHT);
++        paint.setTextSize(12 * density);
++        canvas.drawText(title, right - 13 * density, 22 * density, paint);
++        float baseline = bottom - 13 * density;
++        paint.setColor(level < baseline - 18 * density ? 0xFF161927 : 0xFFF3F5FF);
++        paint.setTextSize(22 * density);
++        canvas.drawText(value, right - 13 * density, baseline, paint);
++        paint.setTextAlign(Paint.Align.LEFT);
++        paint.setTextSize(12 * density);
++        canvas.drawText(detail, left + 13 * density, baseline, paint);
++
++        if (isFocused()) {
++            paint.setStyle(Paint.Style.STROKE);
++            paint.setStrokeWidth(density);
++            paint.setColor(0xDAE0F8FF);
++            canvas.drawRoundRect(track, radius, radius, paint);
++            paint.setStyle(Paint.Style.FILL);
++        }
++    }
++
++    private void drawNetwork(Canvas canvas, float left, float right, double phase) {
++        float bottom = getHeight() / cardScale - density;
++        track.set(left + density, density, right - density, bottom);
++        paint.setColor(0xE91C1D2B);
++        canvas.drawRoundRect(track, 12 * density, 12 * density, paint);
++        // An activity decoration, not a bandwidth percentage; the two values are the measurements.
++        drawLiquid(canvas, bottom - track.height() * 0.30f, 2.4f * density, phase, networkColor);
++        paint.setTypeface(cardTypeface);
++        paint.setColor(0xFFE0E4F0);
++        paint.setTextAlign(Paint.Align.RIGHT);
++        paint.setTextSize(12 * density);
++        canvas.drawText(getResources().getString(R.string.quick_network), right - 13 * density, 22 * density, paint);
++        paint.setTextAlign(Paint.Align.LEFT);
++        paint.setTextSize(19 * density);
++        canvas.drawText("↑  " + upload, left + 13 * density, 51 * density, paint);
++        canvas.drawText("↓  " + download, left + 13 * density, 81 * density, paint);
++    }
++
++    private void drawLiquid(Canvas canvas, float level, float amplitude, double phase, int color) {
++        int save = canvas.save();
++        path.reset();
++        path.addRoundRect(track, 12 * density, 12 * density, Path.Direction.CW);
++        canvas.clipPath(path);
++        drawWave(canvas, level, amplitude, phase + Math.PI, (color & 0xFFFFFF) | 0x66000000);
++        drawWave(canvas, level, amplitude, phase, color);
++        canvas.restoreToCount(save);
++    }
++
++    private void drawWave(Canvas canvas, float level, float amplitude, double phase, int color) {
++        path.reset();
++        path.moveTo(track.left, track.bottom);
++        final int segments = 24;
++        for (int segment = 0; segment <= segments; segment++) {
++            float position = (float) segment / segments;
++            float x = track.left + position * track.width();
++            float y = level + amplitude * (float) Math.sin(position * Math.PI * 4 - phase);
++            path.lineTo(x, y);
++        }
++        path.lineTo(track.right, track.bottom);
++        path.close();
++        paint.setColor(color);
++        canvas.drawPath(path, paint);
++    }
++
++    @Override
++    public void onWindowFocusChanged(boolean hasWindowFocus) {
++        super.onWindowFocusChanged(hasWindowFocus);
++        if (hasWindowFocus && wavesRunning) invalidate();
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        if (animator != null) animator.cancel();
++        super.onDetachedFromWindow();
++    }
++}
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/WallpaperMenu.java b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperMenu.java
+new file mode 100644
+index 00000000..625b3d85
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperMenu.java
+@@ -0,0 +1,131 @@
++package com.gathin.tvhome;
++
++import android.app.AlertDialog;
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.graphics.BitmapFactory;
++import android.graphics.drawable.GradientDrawable;
++import android.text.TextUtils;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.BaseAdapter;
++import android.widget.GridView;
++import android.widget.ImageView;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import java.io.File;
++import java.util.ArrayList;
++import java.util.List;
++
++/** A D-pad gallery for the existing theme wallpaper preference. */
++final class WallpaperMenu {
++    private WallpaperMenu() {}
++
++    static void show(Context context, Runnable onChange) {
++        File dir = Config.dir(context);
++        List<File> images = new ArrayList<>(WallpaperRotation.images(
++                dir == null ? null : new File(dir, "wallpapers")));
++        File single = dir == null ? null : new File(dir, Config.WALLPAPER_NAME);
++        if (single != null && single.isFile()) images.add(0, single);
++        SharedPreferences prefs = context.getSharedPreferences(Config.SETTINGS_NAME, Context.MODE_PRIVATE);
++        String current = prefs.getString(Config.WALLPAPER_CHOICE_KEY, null);
++
++        GridView grid = new GridView(context);
++        grid.setNumColumns(3);
++        grid.setHorizontalSpacing(dp(context, 8));
++        grid.setVerticalSpacing(dp(context, 8));
++        grid.setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 12));
++        GradientDrawable focus = new GradientDrawable();
++        focus.setColor(0x208BD8FF);
++        focus.setStroke(dp(context, 2), 0xFFBFE9FF);
++        focus.setCornerRadius(dp(context, 8));
++        grid.setSelector(focus);
++        grid.setDrawSelectorOnTop(true);
++        grid.setAdapter(new BaseAdapter() {
++            @Override public int getCount() { return images.size() + 2; }
++            @Override public File getItem(int position) { return position < 2 ? null : images.get(position - 2); }
++            @Override public long getItemId(int position) { return position; }
++
++            @Override
++            public View getView(int position, View recycled, ViewGroup parent) {
++                LinearLayout tile = (LinearLayout) recycled;
++                if (tile == null) {
++                    tile = new LinearLayout(context);
++                    tile.setOrientation(LinearLayout.VERTICAL);
++                    tile.setPadding(dp(context, 4), dp(context, 4), dp(context, 4), dp(context, 4));
++                    tile.setBackgroundColor(0xFF26323D);
++                    ImageView image = new ImageView(context);
++                    image.setScaleType(ImageView.ScaleType.CENTER_CROP);
++                    tile.addView(image, new LinearLayout.LayoutParams(-1, dp(context, 84)));
++                    TextView name = new TextView(context);
++                    name.setTextColor(0xFFF0F5FA);
++                    name.setSingleLine(true);
++                    name.setEllipsize(TextUtils.TruncateAt.END);
++                    name.setGravity(Gravity.CENTER);
++                    tile.addView(name, new LinearLayout.LayoutParams(-1, dp(context, 28)));
++                }
++                ImageView image = (ImageView) tile.getChildAt(0);
++                TextView name = (TextView) tile.getChildAt(1);
++                File file = getItem(position);
++                image.setVisibility(file == null ? View.INVISIBLE : View.VISIBLE);
++                image.setImageBitmap(file == null ? null : thumbnail(file));
++                name.setText(position == 0 ? context.getString(R.string.wallpaper_theme_default)
++                        : position == 1 ? context.getString(R.string.wallpaper_none)
++                        : file.getName().replaceFirst("^\\d+-", "").replaceFirst("\\.[^.]+$", "").replace('-', ' '));
++                if (file == null) {
++                    // The two actions have their labels centered in the same space as the photo tiles.
++                    image.setVisibility(View.GONE);
++                    name.getLayoutParams().height = dp(context, 112);
++                } else {
++                    name.getLayoutParams().height = dp(context, 28);
++                }
++                return tile;
++            }
++        });
++        AlertDialog dialog = new AlertDialog.Builder(context)
++                .setTitle(R.string.wallpaper_label)
++                .setView(grid)
++                .setNegativeButton(android.R.string.cancel, null)
++                .create();
++        grid.setOnItemClickListener((parent, view, position, id) -> {
++            SharedPreferences.Editor edit = prefs.edit();
++            if (position == 0) edit.remove(Config.WALLPAPER_CHOICE_KEY);
++            else edit.putString(Config.WALLPAPER_CHOICE_KEY, position == 1 ? "none" : images.get(position - 2).getName());
++            edit.apply();
++            dialog.dismiss();
++            onChange.run();
++        });
++        dialog.show();
++        if (dialog.getWindow() != null) {
++            int width = context.getResources().getDisplayMetrics().widthPixels;
++            int height = context.getResources().getDisplayMetrics().heightPixels;
++            dialog.getWindow().setLayout(Math.min(dp(context, 610), width * 9 / 10),
++                    Math.min(dp(context, 475), height * 9 / 10));
++        }
++        int selected = "none".equals(current) ? 1 : 0;
++        for (int i = 0; i < images.size(); i++) {
++            if (images.get(i).getName().equals(current)) selected = i + 2;
++        }
++        grid.requestFocus();
++        grid.setSelection(selected);
++    }
++
++    private static android.graphics.Bitmap thumbnail(File file) {
++        BitmapFactory.Options options = new BitmapFactory.Options();
++        options.inJustDecodeBounds = true;
++        BitmapFactory.decodeFile(file.getPath(), options);
++        options.inJustDecodeBounds = false;
++        options.inSampleSize = 1;
++        while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > 480) {
++            options.inSampleSize *= 2;
++        }
++        options.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;
++        return BitmapFactory.decodeFile(file.getPath(), options);
++    }
++
++    private static int dp(Context context, int value) {
++        return Math.round(value * context.getResources().getDisplayMetrics().density);
++    }
++}
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/WeatherBackdrop.java b/launcher/app/src/main/java/com/gathin/tvhome/WeatherBackdrop.java
+new file mode 100644
+index 00000000..cf37756f
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/WeatherBackdrop.java
+@@ -0,0 +1,61 @@
++package com.gathin.tvhome;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.view.View;
++
++/** A few precipitation marks in the open wallpaper area of Home. */
++final class WeatherBackdrop extends View {
++    private static final float[] X = {0.28f, 0.43f, 0.55f, 0.65f, 0.74f, 0.87f};
++    private static final float[] Y = {0.34f, 0.63f, 0.44f, 0.71f, 0.29f, 0.55f};
++    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Path drop = new Path();
++    private final float density;
++    private String condition = "";
++
++    WeatherBackdrop(Context context) {
++        super(context);
++        density = getResources().getDisplayMetrics().density;
++        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
++        paint.setStrokeCap(Paint.Cap.ROUND);
++        setVisibility(GONE);
++    }
++
++    void setCondition(String next) {
++        condition = next;
++        setVisibility("rain".equals(next) || "storm".equals(next) || "snow".equals(next) ? VISIBLE : GONE);
++        invalidate();
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        boolean snow = "snow".equals(condition);
++        for (int i = 0; i < X.length; i++) {
++            float x = getWidth() * X[i];
++            float y = getHeight() * Y[i];
++            float size = (4f + i % 3) * density;
++            if (snow) {
++                paint.setColor(i % 2 == 0 ? 0x9ADDEFFF : 0x6ADDEFFF);
++                paint.setStrokeWidth(density);
++                for (int axis = 0; axis < 3; axis++) {
++                    double angle = axis * Math.PI / 3;
++                    float dx = size * (float) Math.cos(angle);
++                    float dy = size * (float) Math.sin(angle);
++                    canvas.drawLine(x - dx, y - dy, x + dx, y + dy, paint);
++                }
++            } else {
++                paint.setColor(i % 2 == 0 ? 0x9481D6F2 : 0x6481D6F2);
++                drop.reset();
++                drop.moveTo(x + size * 0.45f, y - size);
++                drop.cubicTo(x + size * 0.41f, y - size * 0.25f, x + size * 0.78f, y + size * 0.55f,
++                        x, y + size * 0.68f);
++                drop.cubicTo(x - size * 0.88f, y + size * 0.55f, x - size * 0.55f, y - size * 0.18f,
++                        x + size * 0.45f, y - size);
++                drop.close();
++                canvas.drawPath(drop, paint);
++            }
++        }
++    }
++}
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/WeatherCard.java b/launcher/app/src/main/java/com/gathin/tvhome/WeatherCard.java
+new file mode 100644
+index 00000000..057edf59
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/WeatherCard.java
+@@ -0,0 +1,249 @@
++package com.gathin.tvhome;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.Typeface;
++import android.graphics.drawable.GradientDrawable;
++import android.os.FileObserver;
++import android.text.TextUtils;
++import android.util.AttributeSet;
++import android.view.Gravity;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import java.io.File;
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Files;
++
++/** Displays a small, locally supplied forecast snapshot. The launcher does not fetch forecasts. */
++public final class WeatherCard extends LinearLayout {
++    private static final int SECONDARY = 0xFFD4DEE8;
++    private static final int ACCENT = 0xFF81D6F2;
++
++    private final Paint precipitation = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private static final String FILE_NAME = "weather.json";
++
++    private final Runnable refresh = this::reload;
++    private FileObserver watcher;
++    private String currentIcon = "";
++    private float cardScale = 1f;
++    private WeatherBackdrop backdrop;
++
++    public WeatherCard(Context context, AttributeSet attrs) {
++        super(context, attrs);
++        setOrientation(VERTICAL);
++        setWillNotDraw(false);
++        setCardScale(1f);
++    }
++
++    void setCardScale(float scale) {
++        cardScale = scale;
++        setPadding(dp(16), dp(12), dp(16), dp(12));
++        GradientDrawable background = new GradientDrawable(
++                GradientDrawable.Orientation.TL_BR, new int[]{0xDF233D50, 0xED18212D});
++        background.setCornerRadius(dp(14));
++        setBackground(background);
++    }
++
++    void setWallpaperAccent(int accent) {
++        ((GradientDrawable) getBackground()).setColors(new int[]{
++                MainActivity.tint(accent, 0x233D50, accent == 0 ? 0f : 0.28f, 223),
++                MainActivity.tint(accent, 0x18212D, accent == 0 ? 0f : 0.12f, 237)});
++    }
++
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        File dir = Config.dir(getContext());
++        if (dir == null) return;
++        // The string constructor is supported by the launcher's API 26 minimum.
++        watcher = new FileObserver(dir.getAbsolutePath(), FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO
++                | FileObserver.DELETE | FileObserver.MOVED_FROM) {
++            @Override
++            public void onEvent(int event, String path) {
++                if (FILE_NAME.equals(path)) post(refresh);
++            }
++        };
++        watcher.startWatching();
++        reload();
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        if (watcher != null) {
++            watcher.stopWatching();
++            watcher = null;
++        }
++        removeCallbacks(refresh);
++        super.onDetachedFromWindow();
++    }
++
++    void useCompactLayout(WeatherBackdrop backdrop) {
++        this.backdrop = backdrop;
++        setGravity(Gravity.CENTER_VERTICAL);
++        setPadding(dp(13), 0, dp(13), 0);
++    }
++
++    void reload() {
++        removeCallbacks(refresh);
++        if (!isAttachedToWindow()) return;
++        File dir = Config.dir(getContext());
++        File file = dir == null ? null : new File(dir, FILE_NAME);
++        removeAllViews();
++        if (file != null && file.isFile() && file.length() <= 8192) {
++            try {
++                JSONObject weather = new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
++                long now = System.currentTimeMillis();
++                long expires = weather.getLong("expires_at");
++                if (expires > now / 1000L) {
++                    if (backdrop == null) show(weather);
++                    else showCompact(weather);
++                    if (backdrop != null) backdrop.setCondition(currentIcon);
++                    setVisibility(VISIBLE);
++                    long seconds = Math.min(expires - now / 1000L, Integer.MAX_VALUE);
++                    postDelayed(refresh, seconds * 1000L - now % 1000L);
++                    invalidate();
++                    return;
++                }
++            } catch (IOException | JSONException ignored) {
++                removeAllViews();
++            }
++        }
++        currentIcon = "";
++        if (backdrop != null) {
++            backdrop.setCondition(currentIcon);
++            addView(label(getResources().getString(R.string.weather_label), 20, Color.WHITE, Gravity.START));
++            addView(label(getResources().getString(R.string.weather_unavailable), 17, SECONDARY, Gravity.START));
++        }
++        setVisibility(backdrop != null ? VISIBLE : GONE);
++        invalidate();
++    }
++
++    private void show(JSONObject weather) throws JSONException {
++        currentIcon = weather.getString("icon");
++        LinearLayout heading = row();
++        heading.addView(label(symbol(currentIcon), 32, ACCENT, Gravity.START));
++        LinearLayout place = column(heading, 1);
++        place.addView(label(weather.getString("city"), 18, Color.WHITE, Gravity.END));
++        place.addView(label(weather.getString("condition"), 13, SECONDARY, Gravity.END));
++
++        LinearLayout readings = row();
++        readings.setGravity(Gravity.BOTTOM);
++        readings.setPadding(0, dp(8), 0, 0);
++        LinearLayout current = column(readings, 2);
++        current.addView(label(degrees(weather, "temperature"), 42, Color.WHITE, Gravity.START));
++        current.addView(label(getResources().getString(R.string.weather_feels_like,
++                degrees(weather, "feels_like")), 12, SECONDARY, Gravity.START));
++
++        JSONArray hours = weather.getJSONArray("hours");
++        if (hours.length() != 4) throw new JSONException("Expected four forecast hours");
++        for (int i = 0; i < hours.length(); i++) {
++            JSONObject hour = hours.getJSONObject(i);
++            LinearLayout forecast = column(readings, 1);
++            forecast.addView(label(degrees(hour, "temperature"), 15, Color.WHITE, Gravity.CENTER));
++            TextView icon = label(symbol(hour.getString("icon")), 20, ACCENT, Gravity.CENTER);
++            icon.setContentDescription(hour.getString("condition"));
++            forecast.addView(icon);
++            forecast.addView(label(hour.getString("time"), 12, SECONDARY, Gravity.CENTER));
++        }
++    }
++
++    private void showCompact(JSONObject weather) throws JSONException {
++        currentIcon = weather.getString("icon");
++        LinearLayout readings = row();
++        readings.setGravity(Gravity.CENTER_VERTICAL);
++        LinearLayout current = column(readings, 3);
++        current.addView(label(weather.getString("city"), 17, Color.WHITE, Gravity.START));
++        current.addView(label(symbol(currentIcon) + " " + degrees(weather, "temperature"), 23, ACCENT, Gravity.START));
++        current.addView(label(weather.getString("condition"), 13, SECONDARY, Gravity.START));
++        JSONArray hours = weather.getJSONArray("hours");
++        if (hours.length() != 4) throw new JSONException("Expected four forecast hours");
++        for (int i = 0; i < hours.length(); i++) {
++            JSONObject hour = hours.getJSONObject(i);
++            LinearLayout forecast = column(readings, 1);
++            forecast.addView(label(degrees(hour, "temperature"), 17, Color.WHITE, Gravity.CENTER));
++            TextView icon = label(symbol(hour.getString("icon")), 17, ACCENT, Gravity.CENTER);
++            icon.setContentDescription(hour.getString("condition"));
++            forecast.addView(icon);
++            forecast.addView(label(hour.getString("time"), 14, SECONDARY, Gravity.CENTER));
++        }
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        super.onDraw(canvas);
++        if (backdrop != null) return;
++        switch (currentIcon) {
++            case "rain":
++            case "storm":
++                precipitation.setColor(0x7081D6F2);
++                precipitation.setStrokeWidth(dp(1));
++                precipitation.setStrokeCap(Paint.Cap.ROUND);
++                for (int i = 0; i < 3; i++) {
++                    float x = getWidth() * (0.32f + i * 0.09f);
++                    float y = dp(25 + (i % 2) * 10);
++                    canvas.drawLine(x, y, x - dp(3), y + dp(7), precipitation);
++                }
++                break;
++            case "snow":
++                precipitation.setColor(0x99E3F2FF);
++                precipitation.setTextSize(dp(11));
++                canvas.drawText("❄︎", getWidth() * 0.35f, dp(33), precipitation);
++                canvas.drawText("❄︎", getWidth() * 0.47f, dp(43), precipitation);
++                break;
++            default:
++                break;
++        }
++    }
++
++    private LinearLayout row() {
++        LinearLayout row = new LinearLayout(getContext());
++        row.setBaselineAligned(false);
++        addView(row, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
++        return row;
++    }
++
++    private LinearLayout column(LinearLayout row, int weight) {
++        LinearLayout column = new LinearLayout(getContext());
++        column.setOrientation(VERTICAL);
++        row.addView(column, new LayoutParams(0, LayoutParams.WRAP_CONTENT, weight));
++        return column;
++    }
++
++    private TextView label(String text, int size, int color, int gravity) {
++        TextView label = new TextView(getContext());
++        label.setText(text);
++        label.setTextSize(size * cardScale);
++        label.setTextColor(color);
++        label.setGravity(gravity);
++        label.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
++        label.setSingleLine(true);
++        label.setEllipsize(TextUtils.TruncateAt.END);
++        return label;
++    }
++
++    private static String degrees(JSONObject reading, String key) throws JSONException {
++        return reading.getInt(key) + "°";
++    }
++
++    private static String symbol(String icon) {
++        switch (icon) {
++            case "clear": return "☀︎";
++            case "rain": return "☂︎";
++            case "snow": return "❄︎";
++            case "storm": return "ϟ";
++            default: return "☁︎";
++        }
++    }
++
++    private int dp(int value) {
++        return Math.round(value * cardScale * getResources().getDisplayMetrics().density);
++    }
++}
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/WirelessPanel.java b/launcher/app/src/main/java/com/gathin/tvhome/WirelessPanel.java
+new file mode 100644
+index 00000000..e598db15
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/WirelessPanel.java
+@@ -0,0 +1,160 @@
++package com.gathin.tvhome;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.RectF;
++import android.graphics.Typeface;
++import android.graphics.drawable.GradientDrawable;
++import android.os.SystemClock;
++import android.text.TextUtils;
++import android.view.Gravity;
++import android.view.View;
++import android.widget.FrameLayout;
++import android.widget.TextView;
++
++final class WirelessPanel extends FrameLayout {
++    static final int WIDTH = 534;
++    static final int HEIGHT = 380;
++    private static final int[] RING_RADII = {66, 74, 81};
++    private final float density;
++    private final boolean animate;
++    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final RectF ring = new RectF();
++    private final TextView hub;
++    private final TextView wifiTab;
++    private final TextView bluetoothTab;
++    private final TextView action;
++    private final TextView[] nodes = new TextView[6];
++    private final String connection;
++    private final String[] networkNames;
++    private final Runnable wifiSettings;
++    private final Runnable bluetoothSettings;
++
++    WirelessPanel(Context context, String connection, String[] networkNames, boolean animate,
++                  Runnable wifiSettings, Runnable bluetoothSettings, Runnable vpnSettings) {
++        super(context);
++        density = getResources().getDisplayMetrics().density;
++        this.connection = connection;
++        this.networkNames = networkNames;
++        this.animate = animate;
++        this.wifiSettings = wifiSettings;
++        this.bluetoothSettings = bluetoothSettings;
++        setBackground(surface(0xF2111320, 0xFF252A3E, 20));
++        setWillNotDraw(false);
++        int[][] positions = {{68, 76}, {351, 76}, {12, 155}, {378, 155}, {67, 239}, {351, 239}};
++        for (int i = 0; i < nodes.length; i++) {
++            nodes[i] = label("", positions[i][0], positions[i][1], 144, 34, 12);
++            nodes[i].setBackground(surface(0xEC1C2031, 0xFF292F45, 10));
++        }
++        hub = label("", 209, 116, 116, 116, 15);
++        hub.setBackground(surface(0xFF354C8B, 0xFF7087C6, 58));
++        wifiTab = label("Wi-Fi", 117, 324, 99, 34, 14);
++        bluetoothTab = label("Bluetooth", 224, 324, 99, 34, 14);
++        action = label("", 331, 324, 103, 34, 14);
++        wifiTab.setOnClickListener(v -> select(false));
++        bluetoothTab.setOnClickListener(v -> select(true));
++        if (vpnSettings != null) {
++            TextView vpn = label("VPN", 444, 324, 72, 34, 13);
++            vpn.setOnClickListener(v -> vpnSettings.run());
++            style(vpn, false);
++        }
++        select(false);
++    }
++
++    private TextView label(String text, int x, int y, int width, int height, int size) {
++        TextView view = new TextView(getContext());
++        view.setText(text);
++        view.setTextSize(size);
++        view.setTextColor(0xFFF0F2FF);
++        view.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
++        view.setGravity(Gravity.CENTER);
++        view.setMaxLines(2);
++        view.setEllipsize(TextUtils.TruncateAt.END);
++        view.setPadding(dp(7), 0, dp(7), 0);
++        LayoutParams params = new LayoutParams(dp(width), dp(height), Gravity.LEFT | Gravity.TOP);
++        params.leftMargin = dp(x);
++        params.topMargin = dp(y);
++        addView(view, params);
++        return view;
++    }
++
++    private GradientDrawable surface(int fill, int edge, int radius) {
++        GradientDrawable drawable = new GradientDrawable();
++        drawable.setColor(fill);
++        drawable.setCornerRadius(dp(radius));
++        if (edge != 0) drawable.setStroke(Math.max(1, dp(1)), edge);
++        return drawable;
++    }
++
++    private void select(boolean bluetooth) {
++        hub.setText(bluetooth ? "Bluetooth\nAccessories" : "Wi-Fi\n" + connection);
++        action.setText(bluetooth ? "Pair device" : "Networks");
++        Runnable settings = bluetooth ? bluetoothSettings : wifiSettings;
++        action.setOnClickListener(v -> settings.run());
++        for (int i = 0; i < nodes.length; i++) {
++            String name = !bluetooth && i < networkNames.length ? networkNames[i] : "";
++            nodes[i].setText(name);
++            nodes[i].setVisibility(name.isEmpty() ? INVISIBLE : VISIBLE);
++        }
++        style(wifiTab, !bluetooth);
++        style(bluetoothTab, bluetooth);
++        style(action, false);
++        invalidate();
++    }
++
++    private void style(TextView button, boolean selected) {
++        button.setFocusable(true);
++        button.setOnFocusChangeListener((v, focused) -> paintButton(button, selected));
++        paintButton(button, selected);
++    }
++
++    private void paintButton(TextView button, boolean selected) {
++        button.setBackground(surface(selected ? 0xFF354C8B : 0xFF262B3E,
++                button.isFocused() ? 0xFFC3D4FF : 0, 10));
++    }
++
++    void focusTabs() {
++        wifiTab.requestFocusFromTouch();
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        super.onDraw(canvas);
++        float x = dp(267);
++        float y = dp(174);
++        for (TextView node : nodes) {
++            if (node.getVisibility() != VISIBLE) continue;
++            paint.setColor(0x665E76B7);
++            paint.setStrokeWidth(dp(1));
++            canvas.drawLine(x, y, node.getLeft() + node.getWidth() / 2f,
++                    node.getTop() + node.getHeight() / 2f, paint);
++        }
++        boolean spinning = animate && isShown() && hasWindowFocus()
++                && android.animation.ValueAnimator.areAnimatorsEnabled();
++        float phase = spinning ? (SystemClock.uptimeMillis() % 3600L) / 10f : 0f;
++        paint.setStyle(Paint.Style.STROKE);
++        paint.setStrokeCap(Paint.Cap.ROUND);
++        paint.setStrokeWidth(dp(2));
++        for (int radius : RING_RADII) {
++            float r = dp(radius);
++            ring.set(x - r, y - r, x + r, y + r);
++            paint.setColor(0x663D508B);
++            canvas.drawOval(ring, paint);
++            paint.setColor(0xFF7795EA);
++            canvas.drawArc(ring, (radius == 74 ? -phase : phase) + radius * 4, 49, false, paint);
++        }
++        paint.setStyle(Paint.Style.FILL);
++        if (spinning) postInvalidateDelayed(33L);
++    }
++
++    @Override
++    public void onWindowFocusChanged(boolean focused) {
++        super.onWindowFocusChanged(focused);
++        if (focused) invalidate();
++    }
++
++    private int dp(int value) {
++        return Math.round(value * density);
++    }
++}
+diff --git a/launcher/app/src/main/res/drawable/ic_bluetooth.xml b/launcher/app/src/main/res/drawable/ic_bluetooth.xml
+new file mode 100644
+index 00000000..e510c8e1
+--- /dev/null
++++ b/launcher/app/src/main/res/drawable/ic_bluetooth.xml
+@@ -0,0 +1,7 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="22dp" android:height="22dp"
++    android:viewportWidth="24" android:viewportHeight="24">
++    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
++        android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round"
++        android:pathData="M6,6L18,18L12,22V2L18,6L6,18" />
++</vector>
+diff --git a/tools/weather.py b/tools/weather.py
+new file mode 100644
+index 00000000..3f73325c
+--- /dev/null
++++ b/tools/weather.py
+@@ -0,0 +1,96 @@
++#!/usr/bin/env python3
++"""Write an OpenWeather snapshot for the private BRAVIA weather card."""
++
++import argparse
++import json
++import os
++import tempfile
++import time
++from datetime import datetime, timedelta, timezone
++from pathlib import Path
++from urllib.error import HTTPError
++from urllib.parse import urlencode
++from urllib.request import urlopen
++
++API = "https://api.openweathermap.org/data/2.5"
++
++
++def fetch(endpoint, params):
++    with urlopen(f"{API}/{endpoint}?{urlencode(params)}", timeout=15) as response:
++        return json.load(response)
++
++
++def condition(reading):
++    weather = reading["weather"][0]
++    code = weather["id"] // 100
++    icon = {2: "storm", 3: "rain", 5: "rain", 6: "snow"}.get(code, "cloudy")
++    if weather["id"] == 800:
++        icon = "clear"
++    description = weather["description"]
++    return {"icon": icon, "condition": description[:1].upper() + description[1:]}
++
++
++def snapshot(current, forecast, city, now):
++    offset = timezone(timedelta(seconds=forecast["city"]["timezone"]))
++    upcoming = sorted(
++        (reading for reading in forecast["list"] if reading["dt"] > now),
++        key=lambda reading: reading["dt"],
++    )[:4]
++    if len(upcoming) != 4:
++        raise ValueError("OpenWeather did not return four upcoming forecast periods")
++    return {
++        "city": city,
++        **condition(current),
++        "temperature": round(current["main"]["temp"]),
++        "feels_like": round(current["main"]["feels_like"]),
++        "expires_at": now + 3 * 3600,
++        "hours": [
++            {
++                "time": datetime.fromtimestamp(reading["dt"], offset).strftime("%H:%M"),
++                "temperature": round(reading["main"]["temp"]),
++                **condition(reading),
++            }
++            for reading in upcoming
++        ],
++    }
++
++
++def write_snapshot(output, data):
++    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent,
++                                     delete=False) as temporary:
++        staged = Path(temporary.name)
++        try:
++            json.dump(data, temporary, ensure_ascii=False, indent=2)
++            temporary.write("\n")
++            temporary.close()
++            staged.replace(output)
++        finally:
++            staged.unlink(missing_ok=True)
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--lat", type=float, required=True, help="Approximate city latitude")
++    parser.add_argument("--lon", type=float, required=True, help="Approximate city longitude")
++    parser.add_argument("--city", required=True, help="City name to show on the card")
++    parser.add_argument("--output", type=Path, required=True, help="Destination weather.json path")
++    args = parser.parse_args()
++    if not (-90 <= args.lat <= 90 and -180 <= args.lon <= 180):
++        parser.error("Invalid coordinates")
++    key = os.environ.get("OPENWEATHER_API_KEY")
++    if not key:
++        parser.error("Set OPENWEATHER_API_KEY in the environment")
++
++    params = {"lat": args.lat, "lon": args.lon, "units": "metric", "appid": key}
++    try:
++        current = fetch("weather", params)
++        forecast = fetch("forecast", params)
++        write_snapshot(args.output, snapshot(current, forecast, args.city, int(time.time())))
++    except HTTPError as error:
++        parser.exit(1, f"OpenWeather request failed (HTTP {error.code})\n")
++    except (OSError, KeyError, IndexError, TypeError, ValueError):
++        parser.exit(1, "Could not fetch or save a valid OpenWeather snapshot\n")
++
++
++if __name__ == "__main__":
++    main()
